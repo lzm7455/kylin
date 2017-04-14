@@ -294,11 +294,11 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
         jobPool = new ThreadPoolExecutor(corePoolSize, corePoolSize, Long.MAX_VALUE, TimeUnit.DAYS, new SynchronousQueue<Runnable>());
         context = new DefaultContext(Maps.<String, Executable> newConcurrentMap(), jobEngineConfig.getConfig());
 
-        resumeAllRunningJobs();
-
         fetcher = new FetcherRunner();
         fetcherPool.scheduleAtFixedRate(fetcher, 10, ExecutableConstants.DEFAULT_SCHEDULER_INTERVAL_SECONDS, TimeUnit.SECONDS);
         hasStarted = true;
+
+        resumeAllRunningJobs();
     }
 
     private void resumeAllRunningJobs() {
