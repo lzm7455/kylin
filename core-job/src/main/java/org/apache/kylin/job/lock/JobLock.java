@@ -16,23 +16,15 @@
  * limitations under the License.
  */
 
-package org.apache.kylin.common.lock;
+package org.apache.kylin.job.lock;
 
-import org.apache.curator.framework.recipes.cache.PathChildrenCache;
+/**
+ * Among a Kylin cluster, usually only one node runs as the job engine and does the scheduling of build jobs.
+ * This interface is for such negotiation. 
+ */
+public interface JobLock {
+    
+    boolean lockJobEngine();
 
-import java.util.concurrent.Executor;
-
-public interface DistributedJobLock extends JobLock {
-
-    boolean lockWithClient(String lockPath, String lockClient);
-
-    boolean isHasLocked(String lockPath);
-
-    void unlock(String lockPath);
-
-    PathChildrenCache watch(String watchPath, Executor watchExecutor, WatcherProcess process);
-
-    public interface WatcherProcess {
-        void process(String path, String data);
-    }
+    void unlockJobEngine();
 }

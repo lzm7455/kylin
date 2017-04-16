@@ -18,6 +18,7 @@
 
 package org.apache.kylin.job.impl.threadpool;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -34,10 +35,10 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.curator.framework.CuratorFramework;
-import org.apache.curator.framework.recipes.cache.PathChildrenCache;
 import org.apache.curator.framework.state.ConnectionState;
 import org.apache.curator.framework.state.ConnectionStateListener;
 import org.apache.kylin.common.KylinConfig;
+import org.apache.kylin.common.lock.DistributedLock;
 import org.apache.kylin.common.util.SetThreadName;
 import org.apache.kylin.job.Scheduler;
 import org.apache.kylin.job.constant.ExecutableConstants;
@@ -50,8 +51,8 @@ import org.apache.kylin.job.execution.Executable;
 import org.apache.kylin.job.execution.ExecutableManager;
 import org.apache.kylin.job.execution.ExecutableState;
 import org.apache.kylin.job.execution.Output;
-import org.apache.kylin.common.lock.DistributedJobLock;
-import org.apache.kylin.common.lock.JobLock;
+import org.apache.kylin.job.lock.DistributedJobLock;
+import org.apache.kylin.job.lock.JobLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -72,8 +73,8 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
     private ExecutorService watchPool;
     private ExecutorService jobPool;
     private DefaultContext context;
-    private DistributedJobLock jobLock;
-    private PathChildrenCache lockWatch;
+    private DistributedLock jobLock;
+    private Closeable lockWatch;
 
     private static final Logger logger = LoggerFactory.getLogger(DistributedScheduler.class);
     private static final ConcurrentMap<KylinConfig, DistributedScheduler> CACHE = new ConcurrentHashMap<KylinConfig, DistributedScheduler>();
@@ -181,7 +182,7 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
         public void run() {
             try (SetThreadName ignored = new SetThreadName("Job %s", executable.getId())) {
                 String segmentId = executable.getParam(SEGMENT_ID);
-                if (jobLock.lockWithClient(getLockPath(segmentId), serverName)) {
+                if (jobLock.lockPath(getLockPath(segmentId), serverName)) {
                     logger.info(executable.toString() + " scheduled in server: " + serverName);
 
                     context.addRunningJob(executable);
@@ -209,7 +210,7 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
                 if (state != ExecutableState.READY && state != ExecutableState.RUNNING) {
                     if (segmentWithLocks.contains(segmentId)) {
                         logger.info(executable.toString() + " will release the lock for the segment: " + segmentId);
-                        jobLock.unlock(getLockPath(segmentId));
+                        jobLock.unlockPath(getLockPath(segmentId));
                         segmentWithLocks.remove(segmentId);
                     }
                 }
@@ -218,7 +219,7 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
     }
 
     //when the segment lock released but the segment related job still running, resume the job.
-    private class WatcherProcessImpl implements org.apache.kylin.common.lock.DistributedJobLock.WatcherProcess {
+    private class WatcherProcessImpl implements org.apache.kylin.common.lock.DistributedLock.Watcher {
         private String serverName;
 
         public WatcherProcessImpl(String serverName) {
@@ -237,7 +238,7 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
                     if (executable instanceof DefaultChainedExecutable && executable.getParams().get(SEGMENT_ID).equalsIgnoreCase(segmentId) && !nodeData.equalsIgnoreCase(serverName)) {
                         try {
                             logger.warn(nodeData + " has released the lock for: " + segmentId + " but the job still running. so " + serverName + " resume the job");
-                            if (!jobLock.isHasLocked(getLockPath(segmentId))) {
+                            if (!jobLock.isPathLocked(getLockPath(segmentId))) {
                                 executableManager.resumeRunningJobForce(executable.getId());
                                 fetcherPool.schedule(fetcher, 0, TimeUnit.SECONDS);
                                 break;
@@ -264,7 +265,7 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
     }
 
     @Override
-    public synchronized void init(JobEngineConfig jobEngineConfig, final JobLock jobLock) throws SchedulerException {
+    public synchronized void init(JobEngineConfig jobEngineConfig, JobLock jobLock) throws SchedulerException {
         String serverMode = jobEngineConfig.getConfig().getServerMode();
         if (!("job".equals(serverMode.toLowerCase()) || "all".equals(serverMode.toLowerCase()))) {
             logger.info("server mode: " + serverMode + ", no need to run job scheduler");
@@ -288,7 +289,7 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
         //watch the zookeeper node change, so that when one job server is down, other job servers can take over.
         watchPool = Executors.newFixedThreadPool(1);
         WatcherProcessImpl watcherProcess = new WatcherProcessImpl(this.serverName);
-        lockWatch = this.jobLock.watch(getWatchPath(), watchPool, watcherProcess);
+        lockWatch = this.jobLock.watchPath(getWatchPath(), watchPool, watcherProcess);
 
         int corePoolSize = jobEngineConfig.getMaxConcurrentJobLimit();
         jobPool = new ThreadPoolExecutor(corePoolSize, corePoolSize, Long.MAX_VALUE, TimeUnit.DAYS, new SynchronousQueue<Runnable>());
@@ -307,7 +308,7 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
             AbstractExecutable executable = executableManager.getJob(id);
             if (output.getState() == ExecutableState.RUNNING && executable instanceof DefaultChainedExecutable) {
                 try {
-                    if (!jobLock.isHasLocked(executable.getParam(SEGMENT_ID))) {
+                    if (!jobLock.isPathLocked(executable.getParam(SEGMENT_ID))) {
                         executableManager.resumeRunningJobForce(executable.getId());
                         fetcherPool.schedule(fetcher, 0, TimeUnit.SECONDS);
                     }
@@ -348,7 +349,7 @@ public class DistributedScheduler implements Scheduler<AbstractExecutable>, Conn
 
     private void releaseAllLocks() {
         for (String segmentId : segmentWithLocks) {
-            jobLock.unlock(getLockPath(segmentId));
+            jobLock.unlockPath(getLockPath(segmentId));
         }
     }
 

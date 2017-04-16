@@ -16,18 +16,9 @@
  * limitations under the License.
  */
 
-package org.apache.kylin.common.lock;
+package org.apache.kylin.job.lock;
 
-/**
- */
-public class MockJobLock implements JobLock {
-    @Override
-    public boolean lock() {
-        return true;
-    }
+import org.apache.kylin.common.lock.DistributedLock;
 
-    @Override
-    public void unlock() {
-        return;
-    }
+public interface DistributedJobLock extends JobLock, DistributedLock {
 }

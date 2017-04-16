@@ -18,18 +18,18 @@
 
 package org.apache.kylin.dict;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 
-import com.google.common.util.concurrent.MoreExecutors;
-import org.apache.curator.framework.recipes.cache.PathChildrenCache;
 import org.apache.kylin.common.KylinConfig;
-import org.apache.kylin.common.lock.DistributedJobLock;
-import org.apache.kylin.common.util.ClassUtil;
+import org.apache.kylin.common.lock.DistributedLock;
 import org.apache.kylin.common.util.Dictionary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.common.util.concurrent.MoreExecutors;
 
 /**
  * GlobalDictinary based on whole cube, to ensure one value has same dict id in different segments.
@@ -40,7 +40,7 @@ public class GlobalDictionaryBuilder implements IDictionaryBuilder {
     private AppendTrieDictionaryBuilder builder;
     private int baseId;
 
-    private DistributedJobLock lock;
+    private DistributedLock lock;
     private String sourceColumn;
     //the job thread name is UUID+threadID
     private final String jobUUID = Thread.currentThread().getName();
@@ -65,7 +65,7 @@ public class GlobalDictionaryBuilder implements IDictionaryBuilder {
     @Override
     public boolean addValue(String value) {
         if (++counter % 1_000_000 == 0) {
-            if (lock.lockWithClient(getLockPath(sourceColumn), jobUUID)) {
+            if (lock.lockPath(getLockPath(sourceColumn), jobUUID)) {
                 logger.info("processed {} values", counter);
             } else {
                 throw new RuntimeException("Failed to create global dictionary on " + sourceColumn + " This client doesn't keep the lock");
@@ -89,7 +89,7 @@ public class GlobalDictionaryBuilder implements IDictionaryBuilder {
     @Override
     public Dictionary<String> build() throws IOException {
         try {
-            if (lock.lockWithClient(getLockPath(sourceColumn), jobUUID)) {
+            if (lock.lockPath(getLockPath(sourceColumn), jobUUID)) {
                 return builder.build(baseId);
             }
         } finally {
@@ -99,17 +99,17 @@ public class GlobalDictionaryBuilder implements IDictionaryBuilder {
     }
 
     private void lock(final String sourceColumn) throws IOException {
-        lock = (DistributedJobLock) ClassUtil.newInstance("org.apache.kylin.storage.hbase.util.ZookeeperDistributedJobLock");
+        lock = KylinConfig.getInstanceFromEnv().getDistributedLock();
 
-        if (!lock.lockWithClient(getLockPath(sourceColumn), jobUUID)) {
+        if (!lock.lockPath(getLockPath(sourceColumn), jobUUID)) {
             logger.info("{} will wait the lock for {} ", jobUUID, sourceColumn);
 
             final BlockingQueue<String> bq = new ArrayBlockingQueue<String>(1);
 
-            PathChildrenCache cache = lock.watch(getWatchPath(sourceColumn), MoreExecutors.sameThreadExecutor(), new DistributedJobLock.WatcherProcess() {
+            Closeable watch = lock.watchPath(getWatchPath(sourceColumn), MoreExecutors.sameThreadExecutor(), new DistributedLock.Watcher() {
                 @Override
                 public void process(String path, String data) {
-                    if (!data.equalsIgnoreCase(jobUUID) && lock.lockWithClient(getLockPath(sourceColumn), jobUUID)) {
+                    if (!data.equalsIgnoreCase(jobUUID) && lock.lockPath(getLockPath(sourceColumn), jobUUID)) {
                         try {
                             bq.put("getLock");
                         } catch (InterruptedException e) {
@@ -126,7 +126,7 @@ public class GlobalDictionaryBuilder implements IDictionaryBuilder {
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             } finally {
-                cache.close();
+                watch.close();
             }
 
             logger.info("{} has waited the lock {} ms for {} ", jobUUID, (System.currentTimeMillis() - start), sourceColumn);
@@ -134,8 +134,8 @@ public class GlobalDictionaryBuilder implements IDictionaryBuilder {
     }
 
     private void checkAndUnlock() {
-        if (lock.lockWithClient(getLockPath(sourceColumn), jobUUID)) {
-            lock.unlock(getLockPath(sourceColumn));
+        if (lock.lockPath(getLockPath(sourceColumn), jobUUID)) {
+            lock.unlockPath(getLockPath(sourceColumn));
         }
     }
 

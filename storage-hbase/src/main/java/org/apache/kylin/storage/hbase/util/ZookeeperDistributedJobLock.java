@@ -32,7 +32,7 @@ import org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.kylin.common.KylinConfig;
-import org.apache.kylin.common.lock.DistributedJobLock;
+import org.apache.kylin.job.lock.DistributedJobLock;
 import org.apache.zookeeper.CreateMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +40,9 @@ import org.slf4j.LoggerFactory;
 public class ZookeeperDistributedJobLock implements DistributedJobLock {
     private static Logger logger = LoggerFactory.getLogger(ZookeeperDistributedJobLock.class);
 
+    @SuppressWarnings("unused")
     private final KylinConfig config;
+    
     private static final ConcurrentMap<KylinConfig, CuratorFramework> CACHE = new ConcurrentHashMap<KylinConfig, CuratorFramework>();
     private final CuratorFramework zkClient;
 
@@ -100,7 +102,7 @@ public class ZookeeperDistributedJobLock implements DistributedJobLock {
      */
 
     @Override
-    public boolean lockWithClient(String lockPath, String lockClient) {
+    public boolean lockPath(String lockPath, String lockClient) {
         logger.info(lockClient + " start lock the path: " + lockPath);
 
         boolean hasLock = false;
@@ -163,7 +165,7 @@ public class ZookeeperDistributedJobLock implements DistributedJobLock {
      */
 
     @Override
-    public boolean isHasLocked(String lockPath) {
+    public boolean isPathLocked(String lockPath) {
         try {
             return zkClient.checkExists().forPath(lockPath) != null;
         } catch (Exception e) {
@@ -183,7 +185,7 @@ public class ZookeeperDistributedJobLock implements DistributedJobLock {
      */
 
     @Override
-    public void unlock(String lockPath) {
+    public void unlockPath(String lockPath) {
         try {
             if (zkClient.checkExists().forPath(lockPath) != null) {
                 zkClient.delete().guaranteed().deletingChildrenIfNeeded().forPath(lockPath);
@@ -213,7 +215,7 @@ public class ZookeeperDistributedJobLock implements DistributedJobLock {
      */
 
     @Override
-    public PathChildrenCache watch(String watchPath, Executor watchExecutor, final WatcherProcess watcherProcess) {
+    public PathChildrenCache watchPath(String watchPath, Executor watchExecutor, final Watcher watcherProcess) {
         PathChildrenCache cache = new PathChildrenCache(zkClient, watchPath, true);
         try {
             cache.start();
@@ -236,14 +238,15 @@ public class ZookeeperDistributedJobLock implements DistributedJobLock {
     }
 
     @Override
-    public boolean lock() {
+    public boolean lockJobEngine() {
         return true;
     }
 
     @Override
-    public void unlock() {
+    public void unlockJobEngine() {
     }
 
+    @Override
     public void close() {
         try {
             zkClient.close();

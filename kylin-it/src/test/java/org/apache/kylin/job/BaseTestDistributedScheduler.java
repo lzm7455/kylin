@@ -167,7 +167,7 @@ public class BaseTestDistributedScheduler extends HBaseMetadataTestCase {
     }
 
     boolean lock(ZookeeperDistributedJobLock jobLock, String cubeName, String serverName) {
-        return jobLock.lockWithClient(getLockPath(cubeName), serverName);
+        return jobLock.lockPath(getLockPath(cubeName), serverName);
     }
 
     private static void initZk() {
